@@ -70,6 +70,7 @@ public final class Request {
    * This is mutually exclusive with {@link #centerCrop}.
    */
   public final boolean centerInside;
+  public final boolean onlyScaleDown;
   /** Amount to rotate the image in degrees. */
   public final float rotationDegrees;
   /** Rotation pivot on the X axis. */
@@ -78,6 +79,8 @@ public final class Request {
   public final float rotationPivotY;
   /** Whether or not {@link #rotationPivotX} and {@link #rotationPivotY} are set. */
   public final boolean hasRotationPivot;
+  /** True if image should be decoded with inPurgeable and inInputShareable. */
+  public final boolean purgeable;
   /** Target image config for decoding. */
   public final Bitmap.Config config;
   /** The priority of this request. */
@@ -85,8 +88,8 @@ public final class Request {
 
   private Request(Uri uri, int resourceId, String stableKey, List<Transformation> transformations,
       int targetWidth, int targetHeight, boolean centerCrop, boolean centerInside,
-      float rotationDegrees, float rotationPivotX, float rotationPivotY, boolean hasRotationPivot,
-      Bitmap.Config config, Priority priority) {
+      boolean onlyScaleDown, float rotationDegrees, float rotationPivotX, float rotationPivotY,
+      boolean hasRotationPivot, boolean purgeable, Bitmap.Config config, Priority priority) {
     this.uri = uri;
     this.resourceId = resourceId;
     this.stableKey = stableKey;
@@ -99,51 +102,56 @@ public final class Request {
     this.targetHeight = targetHeight;
     this.centerCrop = centerCrop;
     this.centerInside = centerInside;
+    this.onlyScaleDown = onlyScaleDown;
     this.rotationDegrees = rotationDegrees;
     this.rotationPivotX = rotationPivotX;
     this.rotationPivotY = rotationPivotY;
     this.hasRotationPivot = hasRotationPivot;
+    this.purgeable = purgeable;
     this.config = config;
     this.priority = priority;
   }
 
   @Override public String toString() {
-    final StringBuilder sb = new StringBuilder("Request{");
+    final StringBuilder builder = new StringBuilder("Request{");
     if (resourceId > 0) {
-      sb.append(resourceId);
+      builder.append(resourceId);
     } else {
-      sb.append(uri);
+      builder.append(uri);
     }
     if (transformations != null && !transformations.isEmpty()) {
       for (Transformation transformation : transformations) {
-        sb.append(' ').append(transformation.key());
+        builder.append(' ').append(transformation.key());
       }
     }
     if (stableKey != null) {
-      sb.append(" stableKey(").append(stableKey).append(')');
+      builder.append(" stableKey(").append(stableKey).append(')');
     }
     if (targetWidth > 0) {
-      sb.append(" resize(").append(targetWidth).append(',').append(targetHeight).append(')');
+      builder.append(" resize(").append(targetWidth).append(',').append(targetHeight).append(')');
     }
     if (centerCrop) {
-      sb.append(" centerCrop");
+      builder.append(" centerCrop");
     }
     if (centerInside) {
-      sb.append(" centerInside");
+      builder.append(" centerInside");
     }
     if (rotationDegrees != 0) {
-      sb.append(" rotation(").append(rotationDegrees);
+      builder.append(" rotation(").append(rotationDegrees);
       if (hasRotationPivot) {
-        sb.append(" @ ").append(rotationPivotX).append(',').append(rotationPivotY);
+        builder.append(" @ ").append(rotationPivotX).append(',').append(rotationPivotY);
       }
-      sb.append(')');
+      builder.append(')');
+    }
+    if (purgeable) {
+      builder.append(" purgeable");
     }
     if (config != null) {
-      sb.append(' ').append(config);
+      builder.append(' ').append(config);
     }
-    sb.append('}');
+    builder.append('}');
 
-    return sb.toString();
+    return builder.toString();
   }
 
   String logId() {
@@ -194,10 +202,12 @@ public final class Request {
     private int targetHeight;
     private boolean centerCrop;
     private boolean centerInside;
+    private boolean onlyScaleDown;
     private float rotationDegrees;
     private float rotationPivotX;
     private float rotationPivotY;
     private boolean hasRotationPivot;
+    private boolean purgeable;
     private List<Transformation> transformations;
     private Bitmap.Config config;
     private Priority priority;
@@ -230,6 +240,8 @@ public final class Request {
       rotationPivotX = request.rotationPivotX;
       rotationPivotY = request.rotationPivotY;
       hasRotationPivot = request.hasRotationPivot;
+      purgeable = request.purgeable;
+      onlyScaleDown = request.onlyScaleDown;
       if (request.transformations != null) {
         transformations = new ArrayList<Transformation>(request.transformations);
       }
@@ -351,6 +363,24 @@ public final class Request {
       return this;
     }
 
+    /**
+     * Only resize an image if the original image size is bigger than the target size
+     * specified by {@link #resize(int, int)}.
+     */
+    public Builder onlyScaleDown() {
+      if (targetHeight == 0 && targetWidth == 0) {
+        throw new IllegalStateException("onlyScaleDown can not be applied without resize");
+      }
+      onlyScaleDown = true;
+      return this;
+    }
+
+    /** Clear the onlyScaleUp flag, if set. **/
+    public Builder clearOnlyScaleDown() {
+      onlyScaleDown = false;
+      return this;
+    }
+
     /** Rotate the image by the specified degrees. */
     public Builder rotate(float degrees) {
       rotationDegrees = degrees;
@@ -372,6 +402,11 @@ public final class Request {
       rotationPivotX = 0;
       rotationPivotY = 0;
       hasRotationPivot = false;
+      return this;
+    }
+
+    public Builder purgeable() {
+      purgeable = true;
       return this;
     }
 
@@ -412,6 +447,21 @@ public final class Request {
       return this;
     }
 
+    /**
+     * Add a list of custom transformations to be applied to the image.
+     * <p>
+     * Custom transformations will always be run after the built-in transformations.
+     */
+    public Builder transform(List<? extends Transformation> transformations) {
+      if (transformations == null) {
+        throw new IllegalArgumentException("Transformation list must not be null.");
+      }
+      for (int i = 0, size = transformations.size(); i < size; i++) {
+        transform(transformations.get(i));
+      }
+      return this;
+    }
+
     /** Create the immutable {@link Request} object. */
     public Request build() {
       if (centerInside && centerCrop) {
@@ -429,8 +479,8 @@ public final class Request {
         priority = Priority.NORMAL;
       }
       return new Request(uri, resourceId, stableKey, transformations, targetWidth, targetHeight,
-          centerCrop, centerInside, rotationDegrees, rotationPivotX, rotationPivotY,
-          hasRotationPivot, config, priority);
+          centerCrop, centerInside, onlyScaleDown, rotationDegrees, rotationPivotX, rotationPivotY,
+          hasRotationPivot, purgeable, config, priority);
     }
   }
 }

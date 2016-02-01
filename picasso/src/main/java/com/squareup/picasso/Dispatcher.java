@@ -100,6 +100,7 @@ class Dispatcher {
       Downloader downloader, Cache cache, Stats stats) {
     this.dispatcherThread = new DispatcherThread();
     this.dispatcherThread.start();
+    Utils.flushStackLocalLeaks(dispatcherThread.getLooper());
     this.context = context;
     this.service = service;
     this.hunterMap = new LinkedHashMap<String, BitmapHunter>();
@@ -348,6 +349,10 @@ class Dispatcher {
     if (!scansNetworkChanges || hasConnectivity) {
       if (hunter.getPicasso().loggingEnabled) {
         log(OWNER_DISPATCHER, VERB_RETRYING, getLogIdsForHunter(hunter));
+      }
+      //noinspection ThrowableResultOfMethodCallIgnored
+      if (hunter.getException() instanceof NetworkRequestHandler.ContentLengthException) {
+        hunter.networkPolicy |= NetworkPolicy.NO_CACHE.index;
       }
       hunter.future = service.submit(hunter);
       return;

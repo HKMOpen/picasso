@@ -24,6 +24,7 @@ import android.net.Uri;
 import android.widget.ImageView;
 import android.widget.RemoteViews;
 import java.io.IOException;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.jetbrains.annotations.TestOnly;
 
@@ -205,6 +206,17 @@ public class RequestCreator {
     return this;
   }
 
+  /** Internal use only. Used by {@link DeferredRequestCreator}. */
+  RequestCreator clearTag() {
+    this.tag = null;
+    return this;
+  }
+
+  /** Internal use only. Used by {@link DeferredRequestCreator}. */
+  Object getTag() {
+    return tag;
+  }
+
   /** Resize the image to the specified dimension size. */
   public RequestCreator resizeDimen(int targetWidthResId, int targetHeightResId) {
     Resources resources = picasso.context.getResources();
@@ -235,6 +247,15 @@ public class RequestCreator {
    */
   public RequestCreator centerInside() {
     data.centerInside();
+    return this;
+  }
+
+  /**
+   * Only resize an image if the original image size is bigger than the target size
+   * specified by {@link #resize(int, int)}.
+   */
+  public RequestCreator onlyScaleDown() {
+    data.onlyScaleDown();
     return this;
   }
 
@@ -294,6 +315,16 @@ public class RequestCreator {
   }
 
   /**
+   * Add a list of custom transformations to be applied to the image.
+   * <p>
+   * Custom transformations will always be run after the built-in transformations.
+   */
+  public RequestCreator transform(List<? extends Transformation> transformations) {
+    data.transform(transformations);
+    return this;
+  }
+
+  /**
    * @deprecated Use {@link #memoryPolicy(MemoryPolicy, MemoryPolicy...)} instead.
    */
   @Deprecated public RequestCreator skipMemoryCache() {
@@ -346,6 +377,17 @@ public class RequestCreator {
     return this;
   }
 
+  /** Set inPurgeable and inInputShareable when decoding. This will force the bitmap to be decoded
+   * from a byte array instead of a stream, since inPurgeable only affects the former.
+   * <p>
+   * <em>Note</em>: as of API level 21 (Lollipop), the inPurgeable field is deprecated and will be
+   * ignored.
+   */
+  public RequestCreator purgeable() {
+    data.purgeable();
+    return this;
+  }
+
   /** Disable brief fade in of images loaded from the disk cache or network. */
   public RequestCreator noFade() {
     noFade = true;
@@ -383,6 +425,19 @@ public class RequestCreator {
    * <em>Note:</em> It is safe to invoke this method from any thread.
    */
   public void fetch() {
+    fetch(null);
+  }
+
+  /**
+   * Asynchronously fulfills the request without a {@link ImageView} or {@link Target},
+   * and invokes the target {@link Callback} with the result. This is useful when you want to warm
+   * up the cache with an image.
+   * <p>
+   * <em>Note:</em> The {@link Callback} param is a strong reference and will prevent your
+   * {@link android.app.Activity} or {@link android.app.Fragment} from being garbage collected
+   * until the request is completed.
+   */
+  public void fetch(Callback callback) {
     long started = System.nanoTime();
 
     if (deferred) {
@@ -397,7 +452,21 @@ public class RequestCreator {
       Request request = createRequest(started);
       String key = createKey(request, new StringBuilder());
 
-      Action action = new FetchAction(picasso, request, memoryPolicy, networkPolicy, tag, key);
+      if (shouldReadFromMemoryCache(memoryPolicy)) {
+        Bitmap bitmap = picasso.quickMemoryCacheCheck(key);
+        if (bitmap != null) {
+          if (picasso.loggingEnabled) {
+            log(OWNER_MAIN, VERB_COMPLETED, request.plainId(), "from " + MEMORY);
+          }
+          if (callback != null) {
+            callback.onSuccess();
+          }
+          return;
+        }
+      }
+
+      Action action =
+          new FetchAction(picasso, request, memoryPolicy, networkPolicy, tag, key, callback);
       picasso.submit(action);
     }
   }
@@ -490,6 +559,15 @@ public class RequestCreator {
    */
   public void into(RemoteViews remoteViews, int viewId, int notificationId,
       Notification notification) {
+    into(remoteViews, viewId, notificationId, notification, null);
+  }
+
+  /**
+   * Asynchronously fulfills the request into the specified {@link RemoteViews} object with the
+   * given {@code viewId}. This is used for loading bitmaps into a {@link Notification}.
+   */
+  public void into(RemoteViews remoteViews, int viewId, int notificationId,
+      Notification notification, String notificationTag) {
     long started = System.nanoTime();
 
     if (remoteViews == null) {
@@ -511,7 +589,7 @@ public class RequestCreator {
 
     RemoteViewsAction action =
         new NotificationAction(picasso, request, remoteViews, viewId, notificationId, notification,
-            memoryPolicy, networkPolicy, key, tag, errorResId);
+            notificationTag, memoryPolicy, networkPolicy, key, tag, errorResId);
 
     performRemoteViewInto(action);
   }
